@@ -204,49 +204,59 @@ build_chains() {
     block_flag "block_in" && blk_in="yes"
     block_flag "block_out" && blk_out="yes"
 
+    # Правила ссылаются на наборы ipset: если набора нет (контур не установлен
+    # или набор ещё не создан), цепочка остаётся пустой — без мусора в stderr.
     iptables -N "$IN_CHAIN" 2>/dev/null || true
     iptables -F "$IN_CHAIN"
-    if [ "$log_in" = "yes" ]; then
-        iptables -A "$IN_CHAIN" -m set --match-set "$IN_SET4" src -m conntrack --ctstate NEW \
-            -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_IN " --log-level 4
-    fi
-    # Входящие от РКН-подсетей: тишина (DROP), только новые соединения
-    if [ "$blk_in" = "yes" ]; then
-        iptables -A "$IN_CHAIN" -m set --match-set "$IN_SET4" src -m conntrack --ctstate NEW -j DROP
+    if ipset list "$IN_SET4" >/dev/null 2>&1; then
+        if [ "$log_in" = "yes" ]; then
+            iptables -A "$IN_CHAIN" -m set --match-set "$IN_SET4" src -m conntrack --ctstate NEW \
+                -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_IN " --log-level 4
+        fi
+        # Входящие от РКН-подсетей: тишина (DROP), только новые соединения
+        if [ "$blk_in" = "yes" ]; then
+            iptables -A "$IN_CHAIN" -m set --match-set "$IN_SET4" src -m conntrack --ctstate NEW -j DROP
+        fi
     fi
 
     iptables -N "$OUT_CHAIN" 2>/dev/null || true
     iptables -F "$OUT_CHAIN"
-    if [ "$log_out" = "yes" ]; then
-        iptables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET4" dst \
-            -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_OUT " --log-level 4
-    fi
-    # Исходящие к VK/Max/OK: штатный обрыв как в amnezia-blocker (REJECT)
-    if [ "$blk_out" = "yes" ]; then
-        iptables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET4" dst -j REJECT --reject-with tcp-reset
-        iptables -A "$OUT_CHAIN" -m set --match-set "$OUT_SET4" dst -j REJECT
+    if ipset list "$OUT_SET4" >/dev/null 2>&1; then
+        if [ "$log_out" = "yes" ]; then
+            iptables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET4" dst \
+                -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_OUT " --log-level 4
+        fi
+        # Исходящие к VK/Max/OK: штатный обрыв как в amnezia-blocker (REJECT)
+        if [ "$blk_out" = "yes" ]; then
+            iptables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET4" dst -j REJECT --reject-with tcp-reset
+            iptables -A "$OUT_CHAIN" -m set --match-set "$OUT_SET4" dst -j REJECT
+        fi
     fi
 
     if have6; then
         ip6tables -N "$IN_CHAIN" 2>/dev/null || true
         ip6tables -F "$IN_CHAIN" 2>/dev/null
-        if [ "$log_in" = "yes" ]; then
-            ip6tables -A "$IN_CHAIN" -m set --match-set "$IN_SET6" src -m conntrack --ctstate NEW \
-                -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_IN6 " --log-level 4 2>/dev/null
-        fi
-        if [ "$blk_in" = "yes" ]; then
-            ip6tables -A "$IN_CHAIN" -m set --match-set "$IN_SET6" src -m conntrack --ctstate NEW -j DROP 2>/dev/null
+        if ipset list "$IN_SET6" >/dev/null 2>&1; then
+            if [ "$log_in" = "yes" ]; then
+                ip6tables -A "$IN_CHAIN" -m set --match-set "$IN_SET6" src -m conntrack --ctstate NEW \
+                    -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_IN6 " --log-level 4 2>/dev/null
+            fi
+            if [ "$blk_in" = "yes" ]; then
+                ip6tables -A "$IN_CHAIN" -m set --match-set "$IN_SET6" src -m conntrack --ctstate NEW -j DROP 2>/dev/null
+            fi
         fi
 
         ip6tables -N "$OUT_CHAIN" 2>/dev/null || true
         ip6tables -F "$OUT_CHAIN" 2>/dev/null
-        if [ "$log_out" = "yes" ]; then
-            ip6tables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET6" dst \
-                -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_OUT6 " --log-level 4 2>/dev/null
-        fi
-        if [ "$blk_out" = "yes" ]; then
-            ip6tables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET6" dst -j REJECT --reject-with tcp-reset 2>/dev/null
-            ip6tables -A "$OUT_CHAIN" -m set --match-set "$OUT_SET6" dst -j REJECT 2>/dev/null
+        if ipset list "$OUT_SET6" >/dev/null 2>&1; then
+            if [ "$log_out" = "yes" ]; then
+                ip6tables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET6" dst \
+                    -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_OUT6 " --log-level 4 2>/dev/null
+            fi
+            if [ "$blk_out" = "yes" ]; then
+                ip6tables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET6" dst -j REJECT --reject-with tcp-reset 2>/dev/null
+                ip6tables -A "$OUT_CHAIN" -m set --match-set "$OUT_SET6" dst -j REJECT 2>/dev/null
+            fi
         fi
     fi
 }
