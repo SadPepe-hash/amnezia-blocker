@@ -390,6 +390,39 @@ cmd_clearscans() {
     echo "журнал сканирований обнулён (старое из kernel-журнала повторно подхвачено не будет)"
 }
 
+# Полное удаление контура: прыжки, цепочки, наборы, юниты, скрипты, конфиги, логи.
+# Вызывается панелью при удалении приложения; может запускаться из копии в /tmp
+# (сам себя установленный скрипт при этом тоже удалит — inode останется у процесса).
+cmd_uninstall() {
+    remove_jumps
+    # Цепочки (возможно с правилами, ссылающимися на наборы — сначала flush)
+    for ch in "$IN_CHAIN" "$OUT_CHAIN"; do
+        iptables -F "$ch" 2>/dev/null && iptables -X "$ch" 2>/dev/null
+        if have6; then
+            ip6tables -F "$ch" 2>/dev/null && ip6tables -X "$ch" 2>/dev/null
+        fi
+    done
+    # Юниты: выключить и убрать
+    systemctl disable --now rkn-extra-block.timer rkn-agent.timer \
+        rkn-extra-block.service rkn-agent.service 2>/dev/null
+    rm -f /etc/systemd/system/rkn-extra-block.timer \
+          /etc/systemd/system/rkn-extra-block.service \
+          /etc/systemd/system/rkn-agent.timer \
+          /etc/systemd/system/rkn-agent.service
+    systemctl daemon-reload 2>/dev/null
+    # Наборы ipset
+    for s in "$IN_SET4" "$IN_SET6" "$OUT_SET4" "$OUT_SET6"; do
+        ipset destroy "$s" 2>/dev/null
+    done
+    # Скрипты, конфиги, логи
+    rm -f /usr/local/sbin/rkn-extra-block /usr/local/sbin/rkn-agent-collect
+    rm -rf "$CONF_DIR"
+    rm -f /run/rkn-extra-block.lock
+    log "UNINSTALL-OK: контур rkn-extra-block полностью удалён"
+    rm -f "$LOG_FILE" /var/log/rkn-scans.json
+    echo "rkn-extra-block удалён: правила, наборы, юниты, скрипты, конфиги и логи сняты"
+}
+
 case "${1:-}" in
     on)      lock; ensure_deps; cmd_on ;;
     off)     lock; ensure_deps; cmd_off ;;
@@ -399,5 +432,6 @@ case "${1:-}" in
     log)     lock; ensure_deps; shift; cmd_log "${1:-status}" ;;
     scan)    shift; cmd_scan "$@" ;;
     clearscans) lock; cmd_clearscans ;;
-    *) echo "Использование: rkn-extra-block {on|off|status|update|boot|log on|off|status|scan [файлы...]|clearscans}" >&2; exit 2 ;;
+    uninstall) lock; ensure_deps; cmd_uninstall ;;
+    *) echo "Использование: rkn-extra-block {on|off|status|update|boot|log on|off|status|scan [файлы...]|clearscans|uninstall}" >&2; exit 2 ;;
 esac
