@@ -5,12 +5,13 @@
 #   OUT (RKN_EXTRA_OUT): сети VK/Max/OK — ИСХОДЯЩИЕ (OUTPUT + FORWARD, REJECT tcp-reset)
 # Списки обновляются ежедневно (systemd timer), заливка в ipset атомарная (temp -> swap).
 #
-# Команды: on | off | status | update | boot | log on|off|status | scan [файлы...]
+# Команды: on | off | status | update | boot | set флаг=on|off... | log on|off|status | scan [файлы...]
 #   on      — включить (подгрузить списки если пустые, повесить прыжки в цепочки)
 #   off     — выключить (снять прыжки; наборы ipset сохраняются для мгновенного on)
-#   status  — состояние, размеры наборов, наличие правил
-#   update  — скачать свежие списки и атомарно перезалить наборы
+#   status  — состояние, размеры наборов, флаги, дата обновления баз, наличие правил
+#   update  — скачать свежие списки и атомарно перезалить наборы (пишет last_update)
 #   boot    — вызывается systemd при старте (update + восстановить прыжки если state=on)
+#   set     — раздельные флаги block_in|block_out|log_in|log_out = on|off (по умолчанию on)
 #   log on  — журналировать срабатывания (journalctl -k -g RKN_EXTRA), по умолчанию ВЫКЛ
 #   scan    — ретроспектива: найти IP из списков в логах (по умолчанию nginx/auth)
 
@@ -43,6 +44,26 @@ lock() {
 
 get_state() { [ -f "$STATE_FILE" ] && cat "$STATE_FILE" || echo "off"; }
 set_state() { echo "$1" > "$STATE_FILE"; }
+
+# --- флаги направлений (block_in/block_out/log_in/log_out) -------------------
+# Файл-флаг: $CONF_DIR/<flag>, содержимое on|off. Отсутствие файла = on.
+# log-флаги наследуют старый лог-мастер LOG_STATE_FILE, пока свои файлы не созданы.
+block_flag() { [ ! -f "$CONF_DIR/$1" ] || [ "$(cat "$CONF_DIR/$1" 2>/dev/null)" = "on" ]; }
+log_flag() {
+    if [ -f "$CONF_DIR/$1" ]; then
+        [ "$(cat "$CONF_DIR/$1" 2>/dev/null)" = "on" ]; return
+    fi
+    [ ! -f "$LOG_STATE_FILE" ] && return 0
+    [ "$(cat "$LOG_STATE_FILE" 2>/dev/null)" = "on" ]
+}
+flag_val() {
+    if [ -f "$CONF_DIR/$1" ]; then cat "$CONF_DIR/$1" 2>/dev/null; return; fi
+    case "$1" in
+        log_in|log_out) [ -f "$LOG_STATE_FILE" ] && { cat "$LOG_STATE_FILE" 2>/dev/null; return; } ;;
+    esac
+    echo "on"
+}
+flags_line() { echo "flags: block_in=$(flag_val block_in) block_out=$(flag_val block_out) log_in=$(flag_val log_in) log_out=$(flag_val log_out)"; }
 
 load_config() {
     # Значения по умолчанию; переопределяются /etc/rkn-extra-block/config
@@ -177,45 +198,56 @@ remove_jumps() {
 }
 
 build_chains() {
-    local logging="no"
-    [ -f "$LOG_STATE_FILE" ] && [ "$(cat "$LOG_STATE_FILE")" = "on" ] && logging="yes"
+    local log_in="no" log_out="no" blk_in="no" blk_out="no"
+    log_flag "log_in" && log_in="yes"
+    log_flag "log_out" && log_out="yes"
+    block_flag "block_in" && blk_in="yes"
+    block_flag "block_out" && blk_out="yes"
 
     iptables -N "$IN_CHAIN" 2>/dev/null || true
     iptables -F "$IN_CHAIN"
-    if [ "$logging" = "yes" ]; then
+    if [ "$log_in" = "yes" ]; then
         iptables -A "$IN_CHAIN" -m set --match-set "$IN_SET4" src -m conntrack --ctstate NEW \
             -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_IN " --log-level 4
     fi
     # Входящие от РКН-подсетей: тишина (DROP), только новые соединения
-    iptables -A "$IN_CHAIN" -m set --match-set "$IN_SET4" src -m conntrack --ctstate NEW -j DROP
+    if [ "$blk_in" = "yes" ]; then
+        iptables -A "$IN_CHAIN" -m set --match-set "$IN_SET4" src -m conntrack --ctstate NEW -j DROP
+    fi
 
     iptables -N "$OUT_CHAIN" 2>/dev/null || true
     iptables -F "$OUT_CHAIN"
-    if [ "$logging" = "yes" ]; then
+    if [ "$log_out" = "yes" ]; then
         iptables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET4" dst \
             -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_OUT " --log-level 4
     fi
     # Исходящие к VK/Max/OK: штатный обрыв как в amnezia-blocker (REJECT)
-    iptables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET4" dst -j REJECT --reject-with tcp-reset
-    iptables -A "$OUT_CHAIN" -m set --match-set "$OUT_SET4" dst -j REJECT
+    if [ "$blk_out" = "yes" ]; then
+        iptables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET4" dst -j REJECT --reject-with tcp-reset
+        iptables -A "$OUT_CHAIN" -m set --match-set "$OUT_SET4" dst -j REJECT
+    fi
 
     if have6; then
         ip6tables -N "$IN_CHAIN" 2>/dev/null || true
         ip6tables -F "$IN_CHAIN" 2>/dev/null
-        if [ "$logging" = "yes" ]; then
+        if [ "$log_in" = "yes" ]; then
             ip6tables -A "$IN_CHAIN" -m set --match-set "$IN_SET6" src -m conntrack --ctstate NEW \
                 -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_IN6 " --log-level 4 2>/dev/null
         fi
-        ip6tables -A "$IN_CHAIN" -m set --match-set "$IN_SET6" src -m conntrack --ctstate NEW -j DROP 2>/dev/null
+        if [ "$blk_in" = "yes" ]; then
+            ip6tables -A "$IN_CHAIN" -m set --match-set "$IN_SET6" src -m conntrack --ctstate NEW -j DROP 2>/dev/null
+        fi
 
         ip6tables -N "$OUT_CHAIN" 2>/dev/null || true
         ip6tables -F "$OUT_CHAIN" 2>/dev/null
-        if [ "$logging" = "yes" ]; then
+        if [ "$log_out" = "yes" ]; then
             ip6tables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET6" dst \
                 -m limit --limit 10/min -j LOG --log-prefix "RKN_EXTRA_OUT6 " --log-level 4 2>/dev/null
         fi
-        ip6tables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET6" dst -j REJECT --reject-with tcp-reset 2>/dev/null
-        ip6tables -A "$OUT_CHAIN" -m set --match-set "$OUT_SET6" dst -j REJECT 2>/dev/null
+        if [ "$blk_out" = "yes" ]; then
+            ip6tables -A "$OUT_CHAIN" -p tcp -m set --match-set "$OUT_SET6" dst -j REJECT --reject-with tcp-reset 2>/dev/null
+            ip6tables -A "$OUT_CHAIN" -m set --match-set "$OUT_SET6" dst -j REJECT 2>/dev/null
+        fi
     fi
 }
 
@@ -237,6 +269,7 @@ cmd_update() {
     fi
     mkdir -p "$CONF_DIR"
     build_map "$URL_MAP" "$CONF_DIR/nets.map"
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$CONF_DIR/last_update"
 }
 
 cmd_on() {
@@ -272,6 +305,8 @@ cmd_status() {
     echo "rkn_extra_block: $st"
     echo "  входящие (РКН, DROP NEW):  v4=$in4 сетей  v6=$in6 сетей"
     echo "  исходящие (VK/Max, REJECT): v4=$out4 сетей  v6=$out6 сетей"
+    flags_line | sed 's/^/  /'
+    echo "  last_update: $(cat "$CONF_DIR/last_update" 2>/dev/null || echo '—')"
     if iptables -C INPUT -j "$IN_CHAIN" 2>/dev/null; then echo "  правила: iptables INPUT/OUTPUT/FORWARD — вешаются"; else echo "  правила: СНЯТЫ (блокировка неактивна)"; fi
     have6 && ip6tables -C INPUT -j "$IN_CHAIN" 2>/dev/null && echo "  правила v6: вешаются"
 }
@@ -298,22 +333,45 @@ cmd_log() {
         on)
             mkdir -p "$CONF_DIR"
             echo on > "$LOG_STATE_FILE"
+            echo on > "$CONF_DIR/log_in"
+            echo on > "$CONF_DIR/log_out"
             build_chains   # пересобрать цепочки с LOG-правилами (прыжки не трогаем)
             log "LOGGING ON"
             echo "Журналирование ВКЛ — срабатывания: journalctl -k -g RKN_EXTRA (лимит 10/мин)"
             ;;
         off)
             echo off > "$LOG_STATE_FILE"
+            mkdir -p "$CONF_DIR"
+            echo off > "$CONF_DIR/log_in"
+            echo off > "$CONF_DIR/log_out"
             build_chains
             log "LOGGING OFF"
             echo "Журналирование ВЫКЛ"
             ;;
         status|*)
-            local st="off"
-            [ -f "$LOG_STATE_FILE" ] && st=$(cat "$LOG_STATE_FILE")
-            echo "rkn_extra_block logging: $st"
+            echo "rkn_extra_block logging: log_in=$(flag_val log_in) log_out=$(flag_val log_out)"
             ;;
     esac
+}
+
+# Раздельные флаги направлений: rkn-extra-block set block_in=on log_out=off ...
+# Прыжки в INPUT/OUTPUT/FORWARD не трогаем — пересобираются только цепочки.
+cmd_set() {
+    [ "$#" -ge 1 ] || die "set: укажите пары вида block_in=on (флаги: block_in block_out log_in log_out)"
+    local pair name val
+    for pair in "$@"; do
+        case "$pair" in
+            block_in=on|block_in=off|block_out=on|block_out=off|log_in=on|log_in=off|log_out=on|log_out=off)
+                name="${pair%%=*}"; val="${pair#*=}"
+                mkdir -p "$CONF_DIR"
+                echo "$val" > "$CONF_DIR/$name"
+                ;;
+            *) die "set: неизвестная пара '$pair' (нужно block_in|block_out|log_in|log_out = on|off)" ;;
+        esac
+    done
+    build_chains
+    log "SET: $*"
+    flags_line
 }
 
 # Ретроспектива: найти в лог-файлах IP, входящие в текущие наборы rkn-extra-block.
@@ -431,7 +489,8 @@ case "${1:-}" in
     boot)    lock; cmd_boot ;;
     log)     lock; ensure_deps; shift; cmd_log "${1:-status}" ;;
     scan)    shift; cmd_scan "$@" ;;
+    set)     lock; ensure_deps; shift; cmd_set "$@" ;;
     clearscans) lock; cmd_clearscans ;;
     uninstall) lock; ensure_deps; cmd_uninstall ;;
-    *) echo "Использование: rkn-extra-block {on|off|status|update|boot|log on|off|status|scan [файлы...]|clearscans|uninstall}" >&2; exit 2 ;;
+    *) echo "Использование: rkn-extra-block {on|off|status|update|boot|set флаг=on|off...|log on|off|status|scan [файлы...]|clearscans|uninstall}" >&2; exit 2 ;;
 esac
