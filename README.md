@@ -26,7 +26,7 @@
 Нужен fine-grained PAT (Settings → Personal access tokens) с доступом только к этому репо, permission **Contents: Read-only**.
 
 ```bash
-/etc/amnezia-blocker/blocker.sh off 2>/dev/null; curl -fsSL -H "Authorization: Bearer ТОКЕН" -H "Accept: application/vnd.github.raw" https://api.github.com/repos/leonidorlov-hash/amnezia-blocker/contents/blocker.sh -o /etc/amnezia-blocker/blocker.sh && chmod 755 /etc/amnezia-blocker/blocker.sh && /etc/amnezia-blocker/blocker.sh on && /etc/amnezia-blocker/blocker.sh status
+/etc/amnezia-blocker/blocker.sh off 2>/dev/null; curl -fsSL -H "Authorization: Bearer ТОКЕН" -H "Accept: application/vnd.github.raw" https://api.github.com/repos/SadPepe-hash/amnezia-blocker/contents/blocker.sh -o /etc/amnezia-blocker/blocker.sh && chmod 755 /etc/amnezia-blocker/blocker.sh && /etc/amnezia-blocker/blocker.sh on && /etc/amnezia-blocker/blocker.sh status
 ```
 
 Проверка в выводе status: `State: on`, `IPv4 entries > 0`, `Chain (v4): yes`.
@@ -78,7 +78,7 @@ iptables -L AMNEZIA_BLOCK -n               # правила цепи
 ### Установка (root, Debian/Ubuntu)
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/leonidorlov-hash/amnezia-blocker/main/install-rkn-extra.sh | bash
+wget -qO- https://raw.githubusercontent.com/SadPepe-hash/amnezia-blocker/main/install-rkn-extra.sh | bash
 ```
 
 Ставит `rkn-extra-block` в `/usr/local/sbin`, конфиг в `/etc/rkn-extra-block/config`, systemd-сервис (восстановление при загрузке) и таймер (ежедневное обновление списков, `daily` + случайная задержка до 2ч).

@@ -3,7 +3,7 @@
 # Скачивает этот репозиторий и ставит скрипт + systemd-юниты.
 set -euo pipefail
 
-REPO="https://github.com/leonidorlov-hash/amnezia-blocker"
+REPO="https://github.com/SadPepe-hash/amnezia-blocker"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
